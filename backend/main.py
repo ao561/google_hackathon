@@ -14,16 +14,24 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from live_support import LiveSupportBridge
 
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+GEMINI_LIVE_MODEL = os.getenv(
+    "GEMINI_LIVE_MODEL",
+    "gemini-3.1-flash-live-preview",
+)
+GEMINI_LIVE_VOICE = os.getenv("GEMINI_LIVE_VOICE", "Sulafat")
 DB_PATH = Path(__file__).parent / "crisis.db"
 
 app = FastAPI(title="AI Crisis Triage Mapper")
@@ -48,6 +56,20 @@ app.add_middleware(
 # --------------------------------------------------------------------------- #
 class TriageRequest(BaseModel):
     raw_text: str
+
+
+class SupportTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class SupportRequest(TriageRequest):
+    history: list[SupportTurn] = Field(default_factory=list)
+
+
+class SupportResponse(BaseModel):
+    message: str
+    immediate_actions: list[str]
 
 
 class Report(BaseModel):
@@ -168,6 +190,41 @@ def _clamp_urgency(value: int) -> int:
         return 1
 
 
+def _live_report_text(payload: dict, field: str) -> str:
+    value = payload.get(field)
+    if value is None:
+        return "n/a"
+    text = str(value).strip()
+    return text or "n/a"
+
+
+def _live_report_coordinate(payload: dict, field: str) -> float | None:
+    value = payload.get(field)
+    if value in (None, "", "n/a"):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def save_live_report(payload: dict) -> dict:
+    """Validate and persist a Gemini Live tool call through the report store."""
+    extracted = ExtractedReport(
+        name=_live_report_text(payload, "name"),
+        age=_live_report_text(payload, "age"),
+        urgency=_clamp_urgency(payload.get("urgency", 1)),
+        title=_live_report_text(payload, "title"),
+        summary=_live_report_text(payload, "summary"),
+        notes=_live_report_text(payload, "notes"),
+        other_data=_live_report_text(payload, "other_data"),
+        location=_live_report_text(payload, "location"),
+        lat=_live_report_coordinate(payload, "lat"),
+        lng=_live_report_coordinate(payload, "lng"),
+    )
+    return insert_report(extracted).model_dump()
+
+
 # --------------------------------------------------------------------------- #
 # Extraction: Gemini (if key present) or deterministic mock
 # --------------------------------------------------------------------------- #
@@ -189,6 +246,28 @@ from the message below. Rules:
   if unknown.
 
 Message:
+"""
+
+SUPPORT_INSTRUCTIONS = """
+You are a calm crisis-support assistant providing brief psychological first aid,
+not an emergency service or clinician. Respond to the user's latest message in
+the context of the conversation.
+
+Rules:
+- First prioritize immediate physical safety. If there is imminent danger,
+  advise moving to safety only when that does not increase risk and contacting
+  local emergency services now. State that this app cannot place that call.
+- Do not improvise tactical rescue, firefighting, medical, or law-enforcement
+  instructions. Encourage following directions from local authorities.
+- Be warm, steady, non-judgmental, and concise. Acknowledge what the person
+  said. Do not pressure them to tell their story.
+- Offer at most three concrete next actions, one step at a time. Do not suggest
+  deep breathing for smoke/toxic exposure, chest pain, or breathing trouble.
+- Do not diagnose, invent facts, make promises, or claim responders have been
+  dispatched.
+- Ask no more than one essential follow-up question in `message`.
+- `message` should be two to four short sentences.
+- `immediate_actions` should contain zero to three short strings.
 """
 
 
@@ -278,6 +357,66 @@ def extract(raw_text: str) -> ExtractedReport:
     return extract_mock(raw_text)
 
 
+def support_with_gemini(request: SupportRequest) -> SupportResponse:
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    conversation = [
+        {"role": turn.role, "content": turn.content}
+        for turn in request.history[-12:]
+    ]
+    prompt = (
+        f"{SUPPORT_INSTRUCTIONS}\n\n"
+        f"Recent conversation:\n{json.dumps(conversation, ensure_ascii=False)}"
+        f"\n\nLatest user message:\n{request.raw_text}"
+    )
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=SupportResponse,
+            temperature=0.25,
+        ),
+    )
+    if isinstance(response.parsed, SupportResponse):
+        return response.parsed
+    return SupportResponse(**json.loads(response.text))
+
+
+def get_support(request: SupportRequest) -> SupportResponse:
+    if GEMINI_API_KEY:
+        try:
+            return support_with_gemini(request)
+        except Exception as exc:  # noqa: BLE001 - retain key-free safe fallback
+            print(f"[support] Gemini response failed, using fallback: {exc}")
+
+    lower = request.raw_text.lower()
+    immediate_danger = any(word in lower for word in _HIGH_URGENCY_WORDS)
+    if immediate_danger:
+        return SupportResponse(
+            message=(
+                "I’m here with you. If you can move away from the danger "
+                "without putting yourself at more risk, do that now and contact "
+                "local emergency services—this app cannot place that call. "
+                "What is your exact location?"
+            ),
+            immediate_actions=[
+                "Move to a safer place only if it is safe to move.",
+                "Contact local emergency services now.",
+                "Keep your phone with you.",
+            ],
+        )
+    return SupportResponse(
+        message=(
+            "I’m here with you. Stay where you feel safest and take this one "
+            "step at a time. What is the most urgent thing you need right now?"
+        ),
+        immediate_actions=["Stay somewhere safe.", "Keep your phone nearby."],
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Routes
 # --------------------------------------------------------------------------- #
@@ -287,6 +426,8 @@ def health():
         "status": "ok",
         "service": "AI Crisis Triage Mapper",
         "mode": "gemini" if GEMINI_API_KEY else "mock",
+        "live_voice": bool(GEMINI_API_KEY),
+        "live_model": GEMINI_LIVE_MODEL if GEMINI_API_KEY else None,
     }
 
 
@@ -298,6 +439,38 @@ def triage(request: TriageRequest):
     return insert_report(extracted)
 
 
+@app.post("/api/support", response_model=SupportResponse)
+def crisis_support(request: SupportRequest):
+    if not request.raw_text.strip():
+        raise HTTPException(status_code=400, detail="raw_text must not be empty")
+    return get_support(request)
+
+
 @app.get("/api/reports", response_model=list[Report])
 def get_reports():
     return list_reports()
+
+
+@app.websocket("/ws/live-support")
+async def live_support(websocket: WebSocket):
+    if not GEMINI_API_KEY:
+        await websocket.accept()
+        await websocket.send_json(
+            {
+                "type": "error",
+                "message": (
+                    "Live voice requires GEMINI_API_KEY. You can still type "
+                    "your report below."
+                ),
+            }
+        )
+        await websocket.close(code=1011)
+        return
+
+    bridge = LiveSupportBridge(
+        api_key=GEMINI_API_KEY,
+        model=GEMINI_LIVE_MODEL,
+        voice=GEMINI_LIVE_VOICE,
+        save_report=save_live_report,
+    )
+    await bridge.run(websocket)

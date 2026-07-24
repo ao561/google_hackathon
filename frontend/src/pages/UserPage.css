@@ -235,6 +235,28 @@
   text-align: center;
 }
 
+.wave-status > span:last-child {
+  max-width: min(34rem, 82vw);
+}
+
+.wave-status[data-status="connecting"] .listening-dot {
+  animation: thinking-pulse 900ms ease-in-out infinite alternate;
+}
+
+.wave-status[data-status="speaking"] .listening-dot {
+  background: #78dba9;
+  box-shadow: 0 0 0.75rem rgba(120, 219, 169, 0.75);
+}
+
+.wave-status[data-status="error"] {
+  color: #ffb5c5;
+}
+
+.wave-status[data-status="error"] .listening-dot {
+  background: #ff8ca5;
+  box-shadow: 0 0 0.75rem rgba(255, 140, 165, 0.5);
+}
+
 .conversation-thread {
   position: fixed;
   top: clamp(4.75rem, 10vh, 6rem);

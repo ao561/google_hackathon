@@ -6,23 +6,31 @@ import {
   faMicrophone,
 } from "@fortawesome/free-solid-svg-icons";
 import { Link } from "react-router-dom";
-import { getCrisisSupport, triageReport } from "../api.js";
+import {
+  getCrisisSupport,
+  getLiveSupportWebSocketUrl,
+  triageReport,
+} from "../api.js";
 import CrisisRail from "../components/CrisisRail.jsx";
 import { GlowEffect } from "../components/GlowEffect.jsx";
 import SiriWave from "../components/SiriWave.jsx";
 import { LONDON_NEWS } from "../data/news.js";
+import { LiveVoiceClient } from "../live/LiveVoiceClient.js";
 import "./UserPage.css";
 
 export default function UserPage() {
   const [report, setReport] = useState("");
   const [voiceOpen, setVoiceOpen] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState("idle");
+  const [voiceError, setVoiceError] = useState("");
   const [loading, setLoading] = useState(false);
   const [submittedReport, setSubmittedReport] = useState(null);
   const [messages, setMessages] = useState([]);
   const [handoffState, setHandoffState] = useState("idle");
   const [agentThinking, setAgentThinking] = useState(false);
   const [sceneActive, setSceneActive] = useState(false);
-  const recognitionRef = useRef(null);
+  const liveClientRef = useRef(null);
+  const liveTranscriptIdsRef = useRef({ user: null, assistant: null });
   const inputRef = useRef(null);
   const voiceWaveRef = useRef(null);
   const morphZoneRef = useRef(null);
@@ -36,7 +44,8 @@ export default function UserPage() {
 
   useEffect(
     () => () => {
-      recognitionRef.current?.abort();
+      liveClientRef.current?.stop();
+      liveClientRef.current = null;
     },
     [],
   );
@@ -94,57 +103,13 @@ export default function UserPage() {
   };
 
   const closeVoice = () => {
-    recognitionRef.current?.stop();
-    recognitionRef.current = null;
+    liveClientRef.current?.stop();
+    liveClientRef.current = null;
+    liveTranscriptIdsRef.current = { user: null, assistant: null };
     setVoiceOpen(false);
+    setVoiceStatus("idle");
+    setVoiceError("");
     requestAnimationFrame(() => inputRef.current?.focus());
-  };
-
-  const toggleVoice = () => {
-    if (voiceOpen) {
-      closeVoice();
-      return;
-    }
-
-    const Recognition =
-      window.SpeechRecognition || window.webkitSpeechRecognition;
-
-    if (!Recognition) {
-      inputRef.current?.focus();
-      return;
-    }
-
-    setVoiceOpen(true);
-    requestAnimationFrame(() => voiceWaveRef.current?.focus());
-
-    const recognition = new Recognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = "en-GB";
-    recognition.onresult = (event) => {
-      const transcript = Array.from(event.results)
-        .map((result) => result[0].transcript)
-        .join(" ");
-      setReport(transcript);
-      if (transcript.trim()) activateScene();
-    };
-    recognition.onerror = () => {
-      recognitionRef.current = null;
-      setVoiceOpen(false);
-      requestAnimationFrame(() => inputRef.current?.focus());
-    };
-    recognition.onend = () => {
-      recognitionRef.current = null;
-      setVoiceOpen(false);
-    };
-
-    recognitionRef.current = recognition;
-    try {
-      recognition.start();
-    } catch {
-      recognitionRef.current = null;
-      setVoiceOpen(false);
-    }
   };
 
   const nextMessageId = () => {
@@ -152,13 +117,107 @@ export default function UserPage() {
     return messageIdRef.current;
   };
 
+  const appendLiveTranscript = ({ role, text, finished }) => {
+    const messageRole = role === "assistant" ? "assistant" : "user";
+    let messageId = liveTranscriptIdsRef.current[messageRole];
+
+    if (!messageId && text) {
+      messageId = nextMessageId();
+      liveTranscriptIdsRef.current[messageRole] = messageId;
+      setMessages((current) => [
+        ...current,
+        {
+          id: messageId,
+          role: messageRole,
+          content: text,
+        },
+      ]);
+    } else if (messageId && text) {
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === messageId
+            ? { ...message, content: `${message.content}${text}` }
+            : message,
+        ),
+      );
+    }
+
+    if (messageRole === "user" && text) {
+      conversationStartedRef.current = true;
+      initialReportRef.current += text;
+      activateScene();
+    }
+    if (finished) {
+      liveTranscriptIdsRef.current[messageRole] = null;
+    }
+  };
+
+  const toggleVoice = async () => {
+    if (voiceOpen) {
+      closeVoice();
+      return;
+    }
+
+    setVoiceError("");
+    setVoiceStatus("connecting");
+    setVoiceOpen(true);
+    activateScene();
+    requestAnimationFrame(() => voiceWaveRef.current?.focus());
+
+    const client = new LiveVoiceClient({
+      url: getLiveSupportWebSocketUrl(),
+      onStatus: (status) => {
+        if (status === "speaking") {
+          liveTranscriptIdsRef.current.user = null;
+        }
+        setVoiceStatus(status);
+      },
+      onTranscript: appendLiveTranscript,
+      onHandoff: ({ status, report: createdReport }) => {
+        setHandoffState(status);
+        if (createdReport) setSubmittedReport(createdReport);
+      },
+      onInterrupted: () => {
+        liveTranscriptIdsRef.current.assistant = null;
+      },
+      onTurnComplete: () => {
+        liveTranscriptIdsRef.current = { user: null, assistant: null };
+      },
+      onError: (message) => {
+        setVoiceError(message);
+        setVoiceStatus("error");
+      },
+      onClose: ({ intentional }) => {
+        if (liveClientRef.current !== client) return;
+        if (!intentional) {
+          setVoiceError(
+            (current) =>
+              current ||
+              "Live voice disconnected. You can close it and type below.",
+          );
+          setVoiceStatus("error");
+        }
+      },
+    });
+    liveClientRef.current = client;
+
+    try {
+      await client.start();
+    } catch (error) {
+      if (liveClientRef.current !== client) return;
+      setVoiceError(
+        (current) =>
+          current || error.message || "Live voice support could not start.",
+      );
+      setVoiceStatus("error");
+    }
+  };
+
   const submitReport = async (event) => {
     event.preventDefault();
     const trimmedReport = report.trim();
     if (!trimmedReport || loading) return;
 
-    recognitionRef.current?.stop();
-    recognitionRef.current = null;
     setVoiceOpen(false);
     setLoading(true);
     setAgentThinking(true);
@@ -277,7 +336,13 @@ export default function UserPage() {
       <main className="neural-stage">
         <h1 className="neural-title">
           {voiceOpen
-            ? "I’m listening, Danyil."
+            ? voiceStatus === "connecting"
+              ? "Connecting you now."
+              : voiceStatus === "speaking"
+                ? "I’m here with you."
+                : voiceStatus === "error"
+                  ? "Voice support paused."
+                  : "I’m listening, Danyil."
             : loading
               ? "I’m assessing the situation."
               : "What’s happening, Danyil?"}
@@ -425,13 +490,20 @@ export default function UserPage() {
                   width={700}
                   height={190}
                   renderScale={0.68}
-                  active
+                  active={voiceStatus !== "error"}
                   className="voice-siri-wave"
                 />
               )}
-              <span className="wave-status">
+              <span className="wave-status" data-status={voiceStatus}>
                 <span className="listening-dot" aria-hidden="true" />
-                <span>Touch to stop</span>
+                <span>
+                  {voiceError ||
+                    (voiceStatus === "connecting"
+                      ? "Connecting securely…"
+                      : voiceStatus === "speaking"
+                        ? "Speaking — you can interrupt"
+                        : "Listening — touch to stop")}
+                </span>
               </span>
             </span>
           </button>

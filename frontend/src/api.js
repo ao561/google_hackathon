@@ -2,6 +2,16 @@ const API_BASE = (
   import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000"
 ).replace(/\/$/, "");
 
+/** Resolve the browser-to-backend WebSocket without exposing the Gemini key. */
+export function getLiveSupportWebSocketUrl() {
+  const url = new URL(API_BASE, window.location.origin);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = `${url.pathname.replace(/\/$/, "")}/ws/live-support`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
 /** Send a raw crisis report to the backend for Gemini triage + storage. */
 export async function triageReport(rawText) {
   const res = await fetch(`${API_BASE}/api/triage`, {
