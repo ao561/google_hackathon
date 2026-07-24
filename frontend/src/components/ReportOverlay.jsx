@@ -5,7 +5,7 @@ const colorForUrgency = (u) => (u > 7 ? "#ff0044" : "#ffe600");
 
 const show = (v) => (v && v !== "n/a" ? v : null);
 
-export default function ReportOverlay({ report, onClose }) {
+export default function ReportOverlay({ report, onClose, onResolve }) {
   // Close on Escape.
   useEffect(() => {
     const onKey = (e) => e.key === "Escape" && onClose();
@@ -31,6 +31,10 @@ export default function ReportOverlay({ report, onClose }) {
       >
         <button className="overlay-close" onClick={onClose} aria-label="Close">
           ✕
+        </button>
+
+        <button className="overlay-resolve" onClick={onResolve} type="button">
+          Mark resolved
         </button>
 
         <div className="overlay-header">

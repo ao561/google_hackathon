@@ -155,6 +155,12 @@ def list_reports() -> list[Report]:
     return [Report(**dict(row)) for row in rows]
 
 
+def delete_report(report_id: int) -> bool:
+    with get_db() as conn:
+        cur = conn.execute("DELETE FROM reports WHERE id = ?", (report_id,))
+    return cur.rowcount > 0
+
+
 def _extracted_dict(data: ExtractedReport) -> dict:
     d = data.model_dump()
     d["urgency"] = _clamp_urgency(d["urgency"])
@@ -301,3 +307,10 @@ def triage(request: TriageRequest):
 @app.get("/api/reports", response_model=list[Report])
 def get_reports():
     return list_reports()
+
+
+@app.delete("/api/reports/{report_id}")
+def resolve_report(report_id: int):
+    if not delete_report(report_id):
+        raise HTTPException(status_code=404, detail="Report not found")
+    return {"status": "resolved", "id": report_id}

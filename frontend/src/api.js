@@ -28,3 +28,12 @@ export async function getReports() {
   if (!res.ok) throw new Error(`Server responded ${res.status}`);
   return res.json();
 }
+
+/** Mark a report resolved: deletes it from the backend database. */
+export async function resolveReport(id) {
+  const res = await fetch(`${API_BASE}/api/reports/${id}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(`Server responded ${res.status}`);
+  return res.json();
+}
