@@ -273,8 +273,12 @@
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.conversation-thread::-webkit-scrollbar {
+  display: none;
 }
 
 .conversation-turn {

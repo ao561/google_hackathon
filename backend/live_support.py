@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 INPUT_SAMPLE_RATE = 16_000
 OUTPUT_SAMPLE_RATE = 24_000
 SUBMIT_REPORT_TOOL = "submit_responder_report"
+SHOW_REQUEST_UPDATE_TOOL = "show_request_information_updated"
 _AUDIO_STREAM_END = object()
 
 CRISIS_SUPPORT_INSTRUCTION = """
@@ -66,6 +67,13 @@ Priorities:
 5. After a successful tool result, briefly tell the person their information
    was shared with the responder dashboard. Continue helping them stay safe and
    focused until they end the conversation.
+6. AFTER SUBMISSION, if the person gives a distinct piece of materially useful
+   new information about this situation, call show_request_information_updated.
+   Examples include a more precise location, a changed hazard, a new injury,
+   another affected person, or a new access or medical need. Do not call it for
+   repeated facts, small talk, or general emotion. This tool only displays a UI
+   acknowledgement; it does not save data or notify responders. Never tell the
+   person responders received the new information.
 
 Safety-critical instructions may exceed the normal word limit only when
 necessary. Match the user's language when practical.
@@ -144,6 +152,21 @@ SUBMIT_REPORT_DECLARATION = types.FunctionDeclaration(
     },
 )
 
+SHOW_REQUEST_UPDATE_DECLARATION = types.FunctionDeclaration(
+    name=SHOW_REQUEST_UPDATE_TOOL,
+    description=(
+        "Show a UI-only acknowledgement after a responder request was "
+        "submitted and the person provides distinct, materially useful new "
+        "information about the same situation. This tool does not save or "
+        "send the information anywhere."
+    ),
+    parameters_json_schema={
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    },
+)
+
 
 class LiveSupportBridge:
     """Bridge one browser WebSocket to one Gemini Live session."""
@@ -168,6 +191,7 @@ class LiveSupportBridge:
         self._cancelled_tool_calls: set[str] = set()
         self._resume_handle: str | None = None
         self._resume_requested = False
+        self._tool_activity_sequence = 0
 
     async def run(self, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -280,7 +304,14 @@ class LiveSupportBridge:
             session_resumption=types.SessionResumptionConfig(
                 handle=resume_handle
             ),
-            tools=[types.Tool(function_declarations=[SUBMIT_REPORT_DECLARATION])],
+            tools=[
+                types.Tool(
+                    function_declarations=[
+                        SUBMIT_REPORT_DECLARATION,
+                        SHOW_REQUEST_UPDATE_DECLARATION,
+                    ]
+                )
+            ],
         )
 
     async def _receive_from_browser(self, websocket: WebSocket) -> None:
@@ -410,6 +441,45 @@ class LiveSupportBridge:
             ):
                 continue
 
+            self._tool_activity_sequence += 1
+            activity_id = function_call.id or (
+                f"{function_call.name}-{self._tool_activity_sequence}"
+            )
+
+            if function_call.name == SHOW_REQUEST_UPDATE_TOOL:
+                if self._submitted_report is None:
+                    result = {
+                        "ok": False,
+                        "error": (
+                            "No responder request has been submitted in this "
+                            "session yet."
+                        ),
+                    }
+                else:
+                    result = {
+                        "ok": True,
+                        "displayed": True,
+                        "persisted": False,
+                    }
+                    await self._send_json(
+                        websocket,
+                        {
+                            "type": "tool_activity",
+                            "id": activity_id,
+                            "tool": SHOW_REQUEST_UPDATE_TOOL,
+                            "status": "success",
+                        },
+                    )
+
+                responses.append(
+                    types.FunctionResponse(
+                        id=function_call.id,
+                        name=SHOW_REQUEST_UPDATE_TOOL,
+                        response=result,
+                    )
+                )
+                continue
+
             if function_call.name != SUBMIT_REPORT_TOOL:
                 responses.append(
                     types.FunctionResponse(
@@ -422,7 +492,12 @@ class LiveSupportBridge:
 
             await self._send_json(
                 websocket,
-                {"type": "handoff", "status": "sending"},
+                {
+                    "type": "tool_activity",
+                    "id": activity_id,
+                    "tool": SUBMIT_REPORT_TOOL,
+                    "status": "running",
+                },
             )
             try:
                 if self._submitted_report is None:
@@ -437,8 +512,10 @@ class LiveSupportBridge:
                 await self._send_json(
                     websocket,
                     {
-                        "type": "handoff",
-                        "status": "sent",
+                        "type": "tool_activity",
+                        "id": activity_id,
+                        "tool": SUBMIT_REPORT_TOOL,
+                        "status": "success",
                         "report": self._submitted_report,
                     },
                 )
@@ -451,8 +528,10 @@ class LiveSupportBridge:
                 await self._send_json(
                     websocket,
                     {
-                        "type": "handoff",
-                        "status": "failed",
+                        "type": "tool_activity",
+                        "id": activity_id,
+                        "tool": SUBMIT_REPORT_TOOL,
+                        "status": "error",
                         "message": str(exc),
                     },
                 )

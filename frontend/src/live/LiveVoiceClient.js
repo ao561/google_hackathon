@@ -8,7 +8,7 @@ export class LiveVoiceClient {
     onReady,
     onStatus,
     onTranscript,
-    onHandoff,
+    onToolActivity,
     onInterrupted,
     onTurnComplete,
     onError,
@@ -19,7 +19,7 @@ export class LiveVoiceClient {
       onReady,
       onStatus,
       onTranscript,
-      onHandoff,
+      onToolActivity,
       onInterrupted,
       onTurnComplete,
       onError,
@@ -139,8 +139,8 @@ export class LiveVoiceClient {
           this.callbacks.onTranscript?.(message);
           return;
         }
-        if (message.type === "handoff") {
-          this.callbacks.onHandoff?.(message);
+        if (message.type === "tool_activity") {
+          this.callbacks.onToolActivity?.(message);
           return;
         }
         if (message.type === "interrupted") {

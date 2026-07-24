@@ -3,7 +3,9 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faArrowRight,
   faArrowUp,
+  faHeartPulse,
   faMicrophone,
+  faNotesMedical,
 } from "@fortawesome/free-solid-svg-icons";
 import { Link } from "react-router-dom";
 import {
@@ -18,19 +20,23 @@ import { LONDON_NEWS } from "../data/news.js";
 import { LiveVoiceClient } from "../live/LiveVoiceClient.js";
 import "./UserPage.css";
 
+const SUBMIT_RESPONDER_TOOL = "submit_responder_report";
+const SHOW_REQUEST_UPDATE_TOOL = "show_request_information_updated";
+
 export default function UserPage() {
   const [report, setReport] = useState("");
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState("idle");
   const [voiceError, setVoiceError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [submittedReport, setSubmittedReport] = useState(null);
   const [messages, setMessages] = useState([]);
   const [handoffState, setHandoffState] = useState("idle");
   const [agentThinking, setAgentThinking] = useState(false);
   const [sceneActive, setSceneActive] = useState(false);
   const liveClientRef = useRef(null);
   const liveTranscriptIdsRef = useRef({ user: null, assistant: null });
+  const toolActivityMessageIdsRef = useRef(new Map());
+  const latestHandoffActivityRef = useRef(null);
   const inputRef = useRef(null);
   const voiceWaveRef = useRef(null);
   const morphZoneRef = useRef(null);
@@ -117,6 +123,54 @@ export default function UserPage() {
     return messageIdRef.current;
   };
 
+  const recordToolActivity = ({
+    id: activityId,
+    tool,
+    status,
+    report: activityReport,
+  }) => {
+    if (!activityId || !tool) return;
+
+    let messageId = toolActivityMessageIdsRef.current.get(activityId);
+    if (!messageId) {
+      messageId = nextMessageId();
+      toolActivityMessageIdsRef.current.set(activityId, messageId);
+      setMessages((current) => [
+        ...current,
+        {
+          id: messageId,
+          role: "tool",
+          tool,
+          status,
+          report: activityReport ?? null,
+        },
+      ]);
+    } else {
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === messageId
+            ? {
+                ...message,
+                status,
+                report: activityReport ?? message.report,
+              }
+            : message,
+        ),
+      );
+    }
+
+    if (tool === SUBMIT_RESPONDER_TOOL) {
+      latestHandoffActivityRef.current = activityId;
+      setHandoffState(
+        status === "running"
+          ? "sending"
+          : status === "success"
+            ? "sent"
+            : "failed",
+      );
+    }
+  };
+
   const appendLiveTranscript = ({ role, text, finished }) => {
     const messageRole = role === "assistant" ? "assistant" : "user";
     let messageId = liveTranscriptIdsRef.current[messageRole];
@@ -172,10 +226,7 @@ export default function UserPage() {
         setVoiceStatus(status);
       },
       onTranscript: appendLiveTranscript,
-      onHandoff: ({ status, report: createdReport }) => {
-        setHandoffState(status);
-        if (createdReport) setSubmittedReport(createdReport);
-      },
+      onToolActivity: recordToolActivity,
       onInterrupted: () => {
         liveTranscriptIdsRef.current.assistant = null;
       },
@@ -222,7 +273,10 @@ export default function UserPage() {
     setAgentThinking(true);
     activateScene();
     const submissionId = ++submissionRef.current;
-    const history = messages.map(({ role, content }) => ({ role, content }));
+    const handoffActivityId = `typed-handoff-${submissionId}`;
+    const history = messages
+      .filter(({ role }) => role === "user" || role === "assistant")
+      .map(({ role, content }) => ({ role, content }));
     const userMessage = {
       id: nextMessageId(),
       role: "user",
@@ -235,8 +289,11 @@ export default function UserPage() {
     if (!conversationStartedRef.current) {
       conversationStartedRef.current = true;
       initialReportRef.current = trimmedReport;
-      setSubmittedReport(null);
-      setHandoffState("sending");
+      recordToolActivity({
+        id: handoffActivityId,
+        tool: SUBMIT_RESPONDER_TOOL,
+        status: "running",
+      });
 
       const [triageResult, supportResult] = await Promise.allSettled([
         triageReport(trimmedReport),
@@ -246,10 +303,18 @@ export default function UserPage() {
       if (submissionRef.current !== submissionId) return;
 
       if (triageResult.status === "fulfilled") {
-        setSubmittedReport(triageResult.value);
-        setHandoffState("sent");
+        recordToolActivity({
+          id: handoffActivityId,
+          tool: SUBMIT_RESPONDER_TOOL,
+          status: "success",
+          report: triageResult.value,
+        });
       } else {
-        setHandoffState("failed");
+        recordToolActivity({
+          id: handoffActivityId,
+          tool: SUBMIT_RESPONDER_TOOL,
+          status: "error",
+        });
       }
 
       const support =
@@ -309,14 +374,33 @@ export default function UserPage() {
   };
 
   const retryHandoff = async () => {
-    if (!initialReportRef.current || handoffState === "sending") return;
-    setHandoffState("sending");
+    const activityId = latestHandoffActivityRef.current;
+    if (
+      !initialReportRef.current ||
+      !activityId ||
+      handoffState === "sending"
+    ) {
+      return;
+    }
+    recordToolActivity({
+      id: activityId,
+      tool: SUBMIT_RESPONDER_TOOL,
+      status: "running",
+    });
     try {
       const createdReport = await triageReport(initialReportRef.current);
-      setSubmittedReport(createdReport);
-      setHandoffState("sent");
+      recordToolActivity({
+        id: activityId,
+        tool: SUBMIT_RESPONDER_TOOL,
+        status: "success",
+        report: createdReport,
+      });
     } catch {
-      setHandoffState("failed");
+      recordToolActivity({
+        id: activityId,
+        tool: SUBMIT_RESPONDER_TOOL,
+        status: "error",
+      });
     }
   };
 
@@ -354,41 +438,55 @@ export default function UserPage() {
             aria-label="Conversation with crisis support"
             aria-live="polite"
           >
-            {messages.map((message, index) => (
+            {messages.map((message) => (
               <div className="conversation-turn" key={message.id}>
-                <article className={`chat-bubble is-${message.role}`}>
-                  <p>{message.content}</p>
-                  {message.actions?.length > 0 && (
-                    <ul>
-                      {message.actions.map((action) => (
-                        <li key={action}>{action}</li>
-                      ))}
-                    </ul>
-                  )}
-                </article>
-
-                {index === 0 && handoffState !== "idle" && (
-                  <div className="handoff-event" data-state={handoffState}>
-                    <span className="handoff-mark" aria-hidden="true" />
-                    <div>
-                      <span className="handoff-label">Responder handoff</span>
-                      <p>
-                        {handoffState === "sending"
-                          ? "Sending your information to responders…"
-                          : handoffState === "sent"
-                            ? "Your information has been sent to the responders."
-                            : "Your information could not be sent yet."}
-                      </p>
-                      {handoffState === "sent" && submittedReport && (
-                        <Link to="/responder">View responder map</Link>
+                {message.role === "tool" ? (
+                  <div
+                    className="tool-activity"
+                    data-status={message.status}
+                    data-tool={message.tool}
+                  >
+                    <FontAwesomeIcon
+                      className="tool-activity-icon"
+                      icon={
+                        message.tool === SUBMIT_RESPONDER_TOOL
+                          ? faHeartPulse
+                          : faNotesMedical
+                      }
+                      aria-hidden="true"
+                    />
+                    <span>
+                      {message.tool === SHOW_REQUEST_UPDATE_TOOL
+                        ? "Request has been updated with new information."
+                        : message.status === "running"
+                          ? "Sending request to responders…"
+                          : message.status === "success"
+                            ? "Request sent to responders."
+                            : "Request could not be sent."}
+                    </span>
+                    {message.tool === SUBMIT_RESPONDER_TOOL &&
+                      message.status === "success" &&
+                      message.report && (
+                        <Link to="/responder">View map</Link>
                       )}
-                      {handoffState === "failed" && (
+                    {message.tool === SUBMIT_RESPONDER_TOOL &&
+                      message.status === "error" && (
                         <button type="button" onClick={retryHandoff}>
                           Try again
                         </button>
                       )}
-                    </div>
                   </div>
+                ) : (
+                  <article className={`chat-bubble is-${message.role}`}>
+                    <p>{message.content}</p>
+                    {message.actions?.length > 0 && (
+                      <ul>
+                        {message.actions.map((action) => (
+                          <li key={action}>{action}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </article>
                 )}
               </div>
             ))}
