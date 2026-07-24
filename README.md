@@ -1,9 +1,8 @@
 # AI Crisis Triage Mapper
 
-Paste raw, unstructured crisis reports on the left, hit **Analyze Data**, and
-watch AI-extracted events light up a 3D globe — color-coded and scaled by
-urgency. Built with **FastAPI** (backend) and **React + Vite + react-globe.gl**
-(frontend).
+Describe a crisis with text or voice from the assistant page, then watch the
+triaged events light up a 3D globe — color-coded and scaled by urgency. Built
+with **FastAPI** (backend) and **React + Vite + react-globe.gl** (frontend).
 
 > **Hackathon note:** to save time and API cost, the `/api/triage` endpoint
 > returns a hardcoded set of 5 diverse crisis events instead of calling a real
@@ -61,14 +60,18 @@ npm run dev
 Vite prints a local URL (usually **http://localhost:5173**). Open it in your
 browser.
 
+The frontend uses `http://localhost:8000/api/triage` by default. To point it at
+another backend, copy `frontend/.env.example` to `frontend/.env` and set
+`VITE_TRIAGE_API_URL`.
+
 ---
 
 ## Using it
 
 1. Make sure **both** servers are running.
-2. In the app, paste (or use the pre-filled sample) crisis reports in the text
-   area.
-3. Click **Analyze Data**.
+2. Type a report, or tap the microphone to open voice capture and the animated
+   Siri-style wave.
+3. Send the report, then open the responder map when analysis completes.
 4. The globe populates with points:
    - **Neon red** = critical (urgency **> 7**)
    - **Neon yellow** = elevated (urgency **≤ 7**)

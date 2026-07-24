@@ -1,4 +1,7 @@
 import { useRef, useEffect, useState } from "react";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faArrowLeft } from "@fortawesome/free-solid-svg-icons";
+import { Link } from "react-router-dom";
 import Globe from "react-globe.gl";
 
 // Neon red for critical (urgency > 7), neon yellow otherwise.
@@ -43,6 +46,10 @@ export default function ResponderPage({ events }) {
   return (
     <section className="responder-view">
       <aside className="feed">
+        <Link className="back-link" to="/user">
+          <FontAwesomeIcon icon={faArrowLeft} aria-hidden="true" />
+          <span>Crisis assistant</span>
+        </Link>
         <span className="eyebrow">Responder · Live feed</span>
         <div className="legend">
           <span>
