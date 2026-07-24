@@ -6,21 +6,19 @@ import {
   faMicrophone,
 } from "@fortawesome/free-solid-svg-icons";
 import { Link } from "react-router-dom";
+import { triageReport } from "../api.js";
 import CrisisRail from "../components/CrisisRail.jsx";
 import { GlowEffect } from "../components/GlowEffect.jsx";
 import SiriWave from "../components/SiriWave.jsx";
 import { LONDON_NEWS } from "../data/news.js";
 import "./UserPage.css";
 
-export default function UserPage({
-  analyze,
-  loading,
-  error,
-  submitted,
-  eventCount,
-}) {
+export default function UserPage() {
   const [report, setReport] = useState("");
   const [voiceOpen, setVoiceOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [submittedReport, setSubmittedReport] = useState(null);
   const recognitionRef = useRef(null);
   const inputRef = useRef(null);
   const voiceWaveRef = useRef(null);
@@ -32,23 +30,29 @@ export default function UserPage({
     [],
   );
 
+  const closeVoice = () => {
+    recognitionRef.current?.stop();
+    recognitionRef.current = null;
+    setVoiceOpen(false);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
   const toggleVoice = () => {
     if (voiceOpen) {
-      recognitionRef.current?.stop();
-      recognitionRef.current = null;
-      setVoiceOpen(false);
-      requestAnimationFrame(() => inputRef.current?.focus());
+      closeVoice();
+      return;
+    }
+
+    const Recognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!Recognition) {
+      inputRef.current?.focus();
       return;
     }
 
     setVoiceOpen(true);
     requestAnimationFrame(() => voiceWaveRef.current?.focus());
-    const Recognition =
-      window.SpeechRecognition || window.webkitSpeechRecognition;
-
-    if (!Recognition) {
-      return;
-    }
 
     const recognition = new Recognition();
     recognition.continuous = true;
@@ -60,13 +64,14 @@ export default function UserPage({
         .join(" ");
       setReport(transcript);
     };
-    recognition.onerror = (event) => {
-      if (event.error === "not-allowed") {
-        recognitionRef.current = null;
-      }
+    recognition.onerror = () => {
+      recognitionRef.current = null;
+      setVoiceOpen(false);
+      requestAnimationFrame(() => inputRef.current?.focus());
     };
     recognition.onend = () => {
       recognitionRef.current = null;
+      setVoiceOpen(false);
     };
 
     recognitionRef.current = recognition;
@@ -74,10 +79,11 @@ export default function UserPage({
       recognition.start();
     } catch {
       recognitionRef.current = null;
+      setVoiceOpen(false);
     }
   };
 
-  const submitReport = (event) => {
+  const submitReport = async (event) => {
     event.preventDefault();
     const trimmedReport = report.trim();
     if (!trimmedReport || loading) return;
@@ -85,7 +91,21 @@ export default function UserPage({
     recognitionRef.current?.stop();
     recognitionRef.current = null;
     setVoiceOpen(false);
-    analyze(trimmedReport);
+    setLoading(true);
+    setError(null);
+    setSubmittedReport(null);
+
+    try {
+      const createdReport = await triageReport(trimmedReport);
+      setSubmittedReport(createdReport);
+      setReport("");
+    } catch (submissionError) {
+      setError(
+        submissionError.message || "Failed to reach the crisis service.",
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -198,9 +218,9 @@ export default function UserPage({
               I couldn’t send that report. {error}
             </div>
           )}
-          {submitted && !error && (
+          {submittedReport && !error && (
             <div className="feedback-message is-success">
-              <span>{eventCount} crisis signals are ready.</span>
+              <span>{submittedReport.title} is ready for responders.</span>
               <Link to="/responder">View responder map</Link>
             </div>
           )}

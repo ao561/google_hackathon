@@ -1,99 +1,115 @@
 # AI Crisis Triage Mapper
 
-Describe a crisis with text or voice from the assistant page, then watch the
-triaged events light up a 3D globe — color-coded and scaled by urgency. Built
-with **FastAPI** (backend) and **React + Vite + react-globe.gl** (frontend).
+Two roles, three routes, and one live crisis picture:
 
-> **Hackathon note:** to save time and API cost, the `/api/triage` endpoint
-> returns a hardcoded set of 5 diverse crisis events instead of calling a real
-> LLM. Swapping in a real model call is a one-function change in
-> [`backend/main.py`](backend/main.py).
+- **`/user`** — a reporter describes a crisis in free text or by voice. Gemini
+  turns it into a structured record and stores it in SQLite.
+- **`/responder`** — a live, sortable event feed beside an interactive 3D
+  globe. Zoom into a country to filter the feed; select an event for its full
+  AI summary and a Google Maps directions link.
+- **`/news`** — a calm, responsive local crisis briefing.
 
----
+The reporter and news views use the Neural Expressive visual system, while the
+responder view keeps the operational data dense and scannable.
+
+Built with **FastAPI** and **React + Vite**.
+
+> **No API key? It still works.** Without `GEMINI_API_KEY`, the backend uses a
+> deterministic mock extractor so the complete flow can be demonstrated with
+> no external setup or cost.
 
 ## Prerequisites
 
-- **Python 3.10+**
-- **Node.js 18+** and npm
+- Python 3.10+
+- Node.js 18+ and npm
+- Optionally, a
+  [Gemini API key](https://aistudio.google.com/apikey) for live extraction
+- Chrome or Edge for browser-native voice input; typing works everywhere
 
 ## Project layout
 
-```
+```text
 google_hackathon/
-├── backend/         # FastAPI API
-│   ├── main.py
-│   └── requirements.txt
-└── frontend/        # React + Vite app
-    └── src/App.jsx
+├── backend/
+│   ├── main.py                    # Gemini triage, mock mode, SQLite, REST
+│   ├── requirements.txt
+│   └── .env.example
+└── frontend/
+    ├── public/countries.geojson   # bundled country borders
+    └── src/
+        ├── pages/UserPage.jsx
+        ├── pages/NewsPage.jsx
+        ├── pages/ResponderPage.jsx
+        ├── components/ReportOverlay.jsx
+        ├── utils/geo.js
+        └── api.js
 ```
 
----
-
-## 1. Run the backend (FastAPI)
-
-Open a terminal:
+## Run the backend
 
 ```bash
-# (optional but recommended) create a virtual environment at the repo root
 python3 -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-
+source venv/bin/activate
 pip install -r backend/requirements.txt
+
+# Optional: enable Gemini instead of deterministic mock mode.
+cp backend/.env.example backend/.env
+# Edit backend/.env and set GEMINI_API_KEY.
 
 cd backend
 uvicorn main:app --reload --port 8000
 ```
 
-The API is now live at **http://localhost:8000**.
-Interactive docs: **http://localhost:8000/docs**
+The API runs at `http://localhost:8000`; interactive documentation is available
+at `/docs`. `GET /` reports whether extraction is in `gemini` or `mock` mode.
 
-## 2. Run the frontend (React + Vite)
+## Run the frontend
 
-Open a **second** terminal:
+In a second terminal:
 
 ```bash
 cd frontend
-npm install          # already run during setup, safe to run again
+npm install
 npm run dev
 ```
 
-Vite prints a local URL (usually **http://localhost:5173**). Open it in your
-browser.
+Open the printed URL, normally `http://localhost:5173`. The app redirects to
+`/user`.
 
-The frontend uses `http://localhost:8000/api/triage` by default. To point it at
-another backend, copy `frontend/.env.example` to `frontend/.env` and set
-`VITE_TRIAGE_API_URL`.
+To use another backend origin:
 
----
+```bash
+cp frontend/.env.example frontend/.env
+```
 
-## Using it
+Then set `VITE_API_BASE_URL` in `frontend/.env`.
 
-1. Make sure **both** servers are running.
-2. Type a report, or tap the microphone to open voice capture and the animated
-   Siri-style wave.
-3. Send the report, then open the responder map when analysis completes.
-4. The globe populates with points:
-   - **Neon red** = critical (urgency **> 7**)
-   - **Neon yellow** = elevated (urgency **≤ 7**)
-   - Point height and size scale with the urgency score.
-   - The camera flies to the most urgent event. Hover a point for details.
+## End-to-end flow
+
+1. Submit a typed or spoken report from `/user`.
+2. `POST /api/triage` extracts and stores a structured report.
+3. `/responder` polls `GET /api/reports` approximately every four seconds.
+4. Sort by urgency or recency, zoom to filter by country, and select any event
+   to inspect its summary, personal details, location, and directions.
+
+Critical events use neon red for urgency above 7; elevated events use neon
+yellow.
 
 ## API reference
 
-`POST /api/triage`
+| Method | Endpoint | Body | Returns |
+| --- | --- | --- | --- |
+| `POST` | `/api/triage` | `{ "raw_text": "…" }` | Stored structured report |
+| `GET` | `/api/reports` | — | All reports, newest first |
+| `GET` | `/` | — | Health and current extraction mode |
 
-Request body:
+A report contains `id`, `created_at`, `name`, `age`, `urgency`, `title`,
+`summary`, `notes`, `other_data`, `location`, `lat`, and `lng`. Missing text
+fields return as `"n/a"` and missing coordinates as `null`.
 
-```json
-{ "raw_text": "Wildfire near Los Angeles, evacuations ordered..." }
-```
+## Notes
 
-Response: a JSON array of events, each with `lat`, `lng`, `urgency` (1–10) and
-`description`.
-
-## Going further
-
-- Replace the hardcoded list in [`backend/main.py`](backend/main.py) with a real
-  LLM call that parses `raw_text` into the same `CrisisEvent` shape.
-- Adjust the urgency → color / size mapping in
-  [`frontend/src/App.jsx`](frontend/src/App.jsx).
+- Gemini and mock extraction live in `backend/main.py`.
+- Data persists in `backend/crisis.db`, which is gitignored.
+- Globe layers, filtering, polling, and urgency colors live in
+  `frontend/src/pages/ResponderPage.jsx`.
