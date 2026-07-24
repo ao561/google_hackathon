@@ -1,0 +1,35 @@
+- generic [ref=e5]:
+  - navigation "Crisis navigation" [ref=e6]:
+    - link "Incidents" [ref=e7] [cursor=pointer]:
+      - /url: /user
+    - link "Crisis news" [ref=e10] [cursor=pointer]:
+      - /url: /news
+    - button "Focus crisis assistant" [ref=e13] [cursor=pointer]
+  - generic [ref=e16]: London, UK
+  - main [ref=e17]:
+    - heading "What’s happening, Danyil?" [level=1] [ref=e18]
+    - generic [ref=e19]:
+      - generic [ref=e20]:
+        - textbox "Crisis report" [ref=e21]:
+          - /placeholder: Describe the crisis…
+        - button "Start voice input" [ref=e22] [cursor=pointer]
+      - button:
+        - generic:
+          - generic: Listening for a crisis report…
+          - generic: Tap the wave to stop
+    - region [ref=e25]:
+      - generic [ref=e26]:
+        - heading "News" [level=2] [ref=e27]
+        - paragraph [ref=e28]: What’s happening in London, UK
+      - generic [ref=e29]:
+        - article [ref=e30]:
+          - heading "Central London transport teams prepare coordinated response" [level=3] [ref=e31]
+          - paragraph [ref=e32]: Stations and road teams are sharing disruption signals to keep priority routes open.
+        - article [ref=e33]:
+          - heading "Local responders monitor weather-sensitive areas" [level=3] [ref=e34]
+          - paragraph [ref=e35]: Crews are reviewing low-lying routes and community access points across the city.
+        - article [ref=e36]:
+          - heading "Support hubs extend their evening readiness" [level=3] [ref=e37]
+          - paragraph [ref=e38]: Local teams are preparing information, charging and welfare support for residents.
+      - link "Show more" [ref=e39] [cursor=pointer]:
+        - /url: /news
