@@ -8,7 +8,13 @@
   isolation: isolate;
   overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   background: var(--surface);
+}
+
+.neural-view::-webkit-scrollbar {
+  display: none;
 }
 
 .location-indicator {
