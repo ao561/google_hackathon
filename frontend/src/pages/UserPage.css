@@ -329,18 +329,17 @@
   background: var(--surface-bright);
 }
 
-.handoff-event {
+.tool-activity {
   align-self: flex-start;
-  max-width: min(82%, 32rem);
   display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
+  max-width: min(90%, 32rem);
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4375rem;
   margin: 0.125rem 0 0 var(--space-2);
-  padding: 0.625rem 0.75rem;
-  border: 1px solid rgba(168, 199, 250, 0.12);
-  border-radius: var(--radius-m);
-  color: rgba(242, 242, 244, 0.64);
-  background: rgba(168, 199, 250, 0.05);
+  color: rgba(242, 242, 244, 0.42);
+  font-size: 0.75rem;
+  line-height: 1.4;
   opacity: 1;
   transform: translateY(0);
   transition:
@@ -348,62 +347,38 @@
     transform 210ms var(--ease-out);
 }
 
-.handoff-mark {
+.tool-activity-icon {
   flex: 0 0 auto;
-  width: 0.625rem;
-  height: 0.625rem;
-  margin-top: 0.3rem;
-  border: 2px solid rgba(168, 199, 250, 0.45);
-  border-radius: 50%;
+  width: 0.875rem;
+  color: rgba(242, 242, 244, 0.34);
 }
 
-.handoff-event[data-state="sending"] .handoff-mark {
-  border-top-color: #a8c7fa;
-  animation: spin 700ms linear infinite;
+.tool-activity[data-status="running"] .tool-activity-icon {
+  color: rgba(168, 199, 250, 0.58);
 }
 
-.handoff-event[data-state="sent"] .handoff-mark {
-  border-color: #78dba9;
-  background: #78dba9;
-  box-shadow: 0 0 0.75rem rgba(120, 219, 169, 0.32);
+.tool-activity[data-status="success"] .tool-activity-icon {
+  color: rgba(147, 171, 158, 0.68);
 }
 
-.handoff-event[data-state="failed"] .handoff-mark {
-  border-color: #ff8ca5;
-  background: #ff8ca5;
+.tool-activity[data-status="error"] {
+  color: rgba(255, 180, 193, 0.58);
 }
 
-.handoff-label {
-  display: block;
-  margin-bottom: 0.1875rem;
-  color: rgba(242, 242, 244, 0.42);
-  font-size: 0.6875rem;
-  font-weight: 700;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-
-.handoff-event p {
-  margin: 0;
-  font-size: 0.8125rem;
-  line-height: 1.45;
-}
-
-.handoff-event a,
-.handoff-event button {
+.tool-activity a,
+.tool-activity button {
   display: inline-block;
-  margin-top: var(--space-2);
   padding: 0;
   border: 0;
-  color: #a8c7fa;
+  color: rgba(168, 199, 250, 0.68);
   background: transparent;
-  font-size: 0.75rem;
+  font: inherit;
   font-weight: 600;
   text-decoration: none;
   cursor: pointer;
 }
 
-.handoff-event button:active {
+.tool-activity button:active {
   transform: scale(0.97);
 }
 
@@ -433,7 +408,7 @@
 
 @starting-style {
   .chat-bubble,
-  .handoff-event {
+  .tool-activity {
     opacity: 0;
     transform: translateY(0.5rem);
   }
@@ -687,8 +662,7 @@
     line-height: 1.35;
   }
 
-  .handoff-event {
-    max-width: 90%;
+  .tool-activity {
     margin-left: var(--space-1);
   }
 
@@ -815,12 +789,11 @@
   }
 
   .chat-bubble,
-  .handoff-event {
+  .tool-activity {
     transform: none;
     transition: opacity 150ms ease;
   }
 
-  .handoff-event[data-state="sending"] .handoff-mark,
   .chat-bubble.is-thinking span {
     animation-duration: 1.4s;
   }
