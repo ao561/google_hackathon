@@ -19,6 +19,10 @@ venv/
 .venv/
 *.egg-info/
 
+# Secrets & local database
+.env
+*.db
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
