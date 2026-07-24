@@ -1,62 +1,75 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faArrowLeft } from "@fortawesome/free-solid-svg-icons";
+import { Link } from "react-router-dom";
 import Globe from "react-globe.gl";
 import { getReports } from "../api.js";
-import { findCountryAt, pointInFeature, countryName } from "../utils/geo.js";
 import ReportOverlay from "../components/ReportOverlay.jsx";
+import { countryName, findCountryAt, pointInFeature } from "../utils/geo.js";
 
-const colorForUrgency = (u) => (u > 7 ? "#ff0044" : "#ffe600");
+const colorForUrgency = (urgency) =>
+  urgency > 7 ? "#ff0044" : "#ffe600";
 const POLL_MS = 4000;
 const ZOOM_THRESHOLD = 1.6; // camera altitude below which we detect a country
 const DETECT_INTERVAL_MS = 200; // throttle country detection while dragging
 const PIXEL_RATIO_CAP = 1.5; // cap devicePixelRatio (Retina renders 2x = 4x work)
-const esc = (s) => String(s ?? "").replace(/</g, "&lt;");
+const esc = (value) =>
+  String(value ?? "").replace(
+    /[&<>"']/g,
+    (character) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#039;",
+      })[character],
+  );
 
 export default function ResponderPage() {
   const [reports, setReports] = useState([]);
   const [features, setFeatures] = useState([]);
   const [activeCountry, setActiveCountry] = useState(null);
-  const [sortBy, setSortBy] = useState("time"); // "time" | "urgency"
+  const [sortBy, setSortBy] = useState("time");
   const [selected, setSelected] = useState(null);
-
   const globeRef = useRef();
   const wrapRef = useRef();
-  const [dims, setDims] = useState({ width: 800, height: 600 });
   const activeNameRef = useRef(null);
   const throttleRef = useRef({ last: 0, timer: null });
+  const [dims, setDims] = useState({ width: 800, height: 600 });
 
-  // Load country borders once (served locally from /public).
   useEffect(() => {
     fetch("/countries.geojson")
-      .then((r) => r.json())
-      .then((g) => setFeatures(g.features || []))
+      .then((response) => response.json())
+      .then((geoJson) => setFeatures(geoJson.features || []))
       .catch(() => setFeatures([]));
   }, []);
 
-  // Poll the backend for reports.
   useEffect(() => {
     let alive = true;
     const load = () =>
       getReports()
         .then((data) => alive && setReports(data))
         .catch(() => {});
+
     load();
-    const id = setInterval(load, POLL_MS);
+    const intervalId = setInterval(load, POLL_MS);
     return () => {
       alive = false;
-      clearInterval(id);
+      clearInterval(intervalId);
     };
   }, []);
 
-  // Keep the globe sized to its container.
   useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
+    const element = wrapRef.current;
+    if (!element) return undefined;
+
     const update = () =>
-      setDims({ width: el.clientWidth, height: el.clientHeight });
+      setDims({ width: element.clientWidth, height: element.clientHeight });
     update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
   }, []);
 
   // Cap the renderer pixel ratio. On Retina displays the globe otherwise
@@ -70,23 +83,26 @@ export default function ResponderPage() {
 
   // Reports that can actually be plotted.
   const mappable = useMemo(
-    () => reports.filter((r) => r.lat != null && r.lng != null),
-    [reports]
+    () => reports.filter((report) => report.lat != null && report.lng != null),
+    [reports],
   );
 
-  // Feed filtered to the active region, then sorted.
   const visible = useMemo(() => {
     const inRegion = activeCountry
       ? reports.filter(
-          (r) =>
-            r.lat != null &&
-            r.lng != null &&
-            pointInFeature(r.lat, r.lng, activeCountry)
+          (report) =>
+            report.lat != null &&
+            report.lng != null &&
+            pointInFeature(report.lat, report.lng, activeCountry),
         )
       : reports;
     const sorted = [...inRegion];
-    if (sortBy === "urgency") sorted.sort((a, b) => b.urgency - a.urgency);
-    else sorted.sort((a, b) => b.id - a.id); // newest first
+
+    if (sortBy === "urgency") {
+      sorted.sort((a, b) => b.urgency - a.urgency);
+    } else {
+      sorted.sort((a, b) => b.id - a.id);
+    }
     return sorted;
   }, [reports, activeCountry, sortBy]);
 
@@ -100,7 +116,7 @@ export default function ResponderPage() {
         setActiveCountry(found);
       }
     },
-    [features]
+    [features],
   );
 
   // onZoom fires on every camera frame while dragging. Do only the cheap
@@ -136,7 +152,7 @@ export default function ResponderPage() {
         }, wait);
       }
     },
-    [features, detectCountry]
+    [features, detectCountry],
   );
 
   // Clear any pending throttled detection on unmount.
@@ -152,20 +168,28 @@ export default function ResponderPage() {
 
   return (
     <section className="responder-view">
-      {/* LEFT: crisis event feed */}
       <aside className="feed">
+        <Link className="back-link" to="/user">
+          <FontAwesomeIcon icon={faArrowLeft} aria-hidden="true" />
+          <span>Crisis assistant</span>
+        </Link>
+
         <div className="feed-head">
           <span className="section-eyebrow">Global crisis events</span>
-          <div className="sort">
+          <div className="sort" aria-label="Sort crisis events">
             <button
               className={sortBy === "urgency" ? "active" : ""}
               onClick={() => setSortBy("urgency")}
+              type="button"
+              aria-pressed={sortBy === "urgency"}
             >
               Urgency
             </button>
             <button
               className={sortBy === "time" ? "active" : ""}
               onClick={() => setSortBy("time")}
+              type="button"
+              aria-pressed={sortBy === "time"}
             >
               Recent
             </button>
@@ -177,7 +201,11 @@ export default function ResponderPage() {
             <span>
               Showing <b>{countryName(activeCountry)}</b>
             </span>
-            <button onClick={clearRegion} aria-label="Clear region filter">
+            <button
+              onClick={clearRegion}
+              type="button"
+              aria-label="Clear region filter"
+            >
               ✕
             </button>
           </div>
@@ -196,33 +224,33 @@ export default function ResponderPage() {
           <p className="empty">
             {activeCountry
               ? "No events in this region yet."
-              : "No crisis events yet. Submit reports from the User page."}
+              : "No crisis events yet. Submit a report from the assistant."}
           </p>
         ) : (
           <div className="event-list">
-            {visible.map((r) => (
+            {visible.map((report) => (
               <button
                 className="event-box"
-                key={r.id}
-                onClick={() => setSelected(r)}
+                key={report.id}
+                onClick={() => setSelected(report)}
+                type="button"
               >
                 <span
                   className="badge"
-                  style={{ background: colorForUrgency(r.urgency) }}
+                  style={{ background: colorForUrgency(report.urgency) }}
                 >
-                  {r.urgency}
+                  {report.urgency}
                 </span>
-                <div className="event-body">
-                  <div className="event-title">{r.title}</div>
-                  <div className="event-loc">📍 {r.location}</div>
-                </div>
+                <span className="event-body">
+                  <span className="event-title">{report.title}</span>
+                  <span className="event-loc">📍 {report.location}</span>
+                </span>
               </button>
             ))}
           </div>
         )}
       </aside>
 
-      {/* RIGHT: interactive globe */}
       <div className="globe-wrap" ref={wrapRef}>
         <Globe
           ref={globeRef}
@@ -233,11 +261,10 @@ export default function ResponderPage() {
           atmosphereColor="#3a7bd5"
           atmosphereAltitude={0.22}
           onZoom={handleZoom}
-          /* Heatmap: darker/hotter where reports cluster and urgency is high */
-          heatmapsData={[mappable]}
+          heatmapsData={mappable.length ? [mappable] : []}
           heatmapPointLat="lat"
           heatmapPointLng="lng"
-          heatmapPointWeight={(d) => d.urgency / 2}
+          heatmapPointWeight={(report) => report.urgency / 2}
           heatmapBandwidth={0.9}
           heatmapColorSaturation={2.2}
           heatmapTopAltitude={0.28}
@@ -246,17 +273,16 @@ export default function ResponderPage() {
           pointsData={mappable}
           pointLat="lat"
           pointLng="lng"
-          pointColor={(d) => colorForUrgency(d.urgency)}
-          pointAltitude={(d) => 0.02 + (d.urgency / 10) * 0.25}
+          pointColor={(report) => colorForUrgency(report.urgency)}
+          pointAltitude={(report) => 0.02 + (report.urgency / 10) * 0.25}
           pointRadius={0.22}
-          pointLabel={(d) =>
-            `<div class="tip"><b>Urgency ${d.urgency}/10 · ${esc(
-              d.location
-            )}</b><br/>${esc(d.summary)}</div>`
+          pointLabel={(report) =>
+            `<div class="tip"><b>Urgency ${report.urgency}/10 · ${esc(
+              report.location,
+            )}</b><br/>${esc(report.summary)}</div>`
           }
-          onPointClick={(d) => setSelected(d)}
+          onPointClick={(report) => setSelected(report)}
           pointsMerge={false}
-          /* Region outline: only the active country */
           polygonsData={activeCountry ? [activeCountry] : []}
           polygonCapColor={() => "rgba(255, 0, 68, 0.12)"}
           polygonSideColor={() => "rgba(255, 0, 68, 0.05)"}

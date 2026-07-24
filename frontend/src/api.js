@@ -1,4 +1,6 @@
-const API_BASE = "http://localhost:8000";
+const API_BASE = (
+  import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000"
+).replace(/\/$/, "");
 
 /** Send a raw crisis report to the backend for Gemini triage + storage. */
 export async function triageReport(rawText) {
