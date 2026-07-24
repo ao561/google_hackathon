@@ -177,6 +177,13 @@ def list_reports() -> list[Report]:
     return [Report(**dict(row)) for row in rows]
 
 
+def delete_report(report_id: int) -> bool:
+    """Permanently remove a resolved report. Returns False if it didn't exist."""
+    with get_db() as conn:
+        cur = conn.execute("DELETE FROM reports WHERE id = ?", (report_id,))
+    return cur.rowcount > 0
+
+
 def _extracted_dict(data: ExtractedReport) -> dict:
     d = data.model_dump()
     d["urgency"] = _clamp_urgency(d["urgency"])
@@ -449,6 +456,12 @@ def crisis_support(request: SupportRequest):
 @app.get("/api/reports", response_model=list[Report])
 def get_reports():
     return list_reports()
+
+
+@app.delete("/api/reports/{report_id}", status_code=204)
+def resolve_report(report_id: int):
+    if not delete_report(report_id):
+        raise HTTPException(status_code=404, detail="Report not found")
 
 
 @app.websocket("/ws/live-support")

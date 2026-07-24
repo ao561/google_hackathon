@@ -5,7 +5,7 @@ const colorForUrgency = (u) => (u > 7 ? "#ff0044" : "#ffe600");
 
 const show = (v) => (v && v !== "n/a" ? v : null);
 
-export default function ReportOverlay({ report, onClose }) {
+export default function ReportOverlay({ report, onClose, onResolve }) {
   // Close on Escape.
   useEffect(() => {
     const onKey = (e) => e.key === "Escape" && onClose();
@@ -40,13 +40,22 @@ export default function ReportOverlay({ report, onClose }) {
           >
             {report.urgency}
           </span>
-          <div>
+          <div className="overlay-header-info">
             <span className="section-eyebrow">AI crisis summary</span>
             <h2>{report.title}</h2>
             <div className="overlay-elapsed">
               Reported {formatElapsed(report.created_at)}
             </div>
           </div>
+          {onResolve && (
+            <button
+              className="overlay-resolve"
+              onClick={() => onResolve(report.id)}
+              type="button"
+            >
+              ✓ Mark resolved
+            </button>
+          )}
         </div>
 
         <div className="overlay-grid">

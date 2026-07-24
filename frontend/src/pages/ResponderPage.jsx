@@ -3,7 +3,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faArrowLeft } from "@fortawesome/free-solid-svg-icons";
 import { Link } from "react-router-dom";
 import Globe from "react-globe.gl";
-import { getReports } from "../api.js";
+import { getReports, resolveReport } from "../api.js";
 import ReportOverlay from "../components/ReportOverlay.jsx";
 import { countryName, findCountryAt, pointInFeature } from "../utils/geo.js";
 
@@ -166,6 +166,15 @@ export default function ResponderPage() {
     setActiveCountry(null);
   };
 
+  // Optimistically remove the report everywhere (feed, globe, overlay), then
+  // tell the backend to delete it for good. A failed request self-heals on
+  // the next poll since the report would still be in the DB.
+  const handleResolve = useCallback((id) => {
+    setReports((prev) => prev.filter((report) => report.id !== id));
+    setSelected((prev) => (prev?.id === id ? null : prev));
+    resolveReport(id).catch(() => {});
+  }, []);
+
   return (
     <section className="responder-view">
       <aside className="feed">
@@ -229,23 +238,34 @@ export default function ResponderPage() {
         ) : (
           <div className="event-list">
             {visible.map((report) => (
-              <button
-                className="event-box"
-                key={report.id}
-                onClick={() => setSelected(report)}
-                type="button"
-              >
-                <span
-                  className="badge"
-                  style={{ background: colorForUrgency(report.urgency) }}
+              <div className="event-box" key={report.id}>
+                <button
+                  className="event-main"
+                  onClick={() => setSelected(report)}
+                  type="button"
                 >
-                  {report.urgency}
-                </span>
-                <span className="event-body">
-                  <span className="event-title">{report.title}</span>
-                  <span className="event-loc">📍 {report.location}</span>
-                </span>
-              </button>
+                  <span
+                    className="badge"
+                    style={{ background: colorForUrgency(report.urgency) }}
+                  >
+                    {report.urgency}
+                  </span>
+                  <span className="event-body">
+                    <span className="event-title">{report.title}</span>
+                    <span className="event-loc">📍 {report.location}</span>
+                  </span>
+                </button>
+                <button
+                  className="event-resolve"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleResolve(report.id);
+                  }}
+                  type="button"
+                >
+                  Resolved
+                </button>
+              </div>
             ))}
           </div>
         )}
@@ -296,7 +316,11 @@ export default function ResponderPage() {
       </div>
 
       {selected && (
-        <ReportOverlay report={selected} onClose={() => setSelected(null)} />
+        <ReportOverlay
+          report={selected}
+          onClose={() => setSelected(null)}
+          onResolve={handleResolve}
+        />
       )}
     </section>
   );
