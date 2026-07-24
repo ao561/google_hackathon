@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faArrowRight,
@@ -6,7 +6,7 @@ import {
   faMicrophone,
 } from "@fortawesome/free-solid-svg-icons";
 import { Link } from "react-router-dom";
-import { triageReport } from "../api.js";
+import { getCrisisSupport, triageReport } from "../api.js";
 import CrisisRail from "../components/CrisisRail.jsx";
 import { GlowEffect } from "../components/GlowEffect.jsx";
 import SiriWave from "../components/SiriWave.jsx";
@@ -17,11 +17,22 @@ export default function UserPage() {
   const [report, setReport] = useState("");
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
   const [submittedReport, setSubmittedReport] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [handoffState, setHandoffState] = useState("idle");
+  const [agentThinking, setAgentThinking] = useState(false);
+  const [sceneActive, setSceneActive] = useState(false);
   const recognitionRef = useRef(null);
   const inputRef = useRef(null);
   const voiceWaveRef = useRef(null);
+  const morphZoneRef = useRef(null);
+  const conversationRef = useRef(null);
+  const sceneActiveRef = useRef(false);
+  const morphStartRectRef = useRef(null);
+  const conversationStartedRef = useRef(false);
+  const initialReportRef = useRef("");
+  const messageIdRef = useRef(0);
+  const submissionRef = useRef(0);
 
   useEffect(
     () => () => {
@@ -29,6 +40,58 @@ export default function UserPage() {
     },
     [],
   );
+
+  useEffect(() => {
+    const conversation = conversationRef.current;
+    if (!conversation || !sceneActive) return;
+
+    const behavior = window.matchMedia("(prefers-reduced-motion: reduce)")
+      .matches
+      ? "auto"
+      : "smooth";
+    conversation.scrollTo({
+      top: conversation.scrollHeight,
+      behavior,
+    });
+  }, [agentThinking, handoffState, messages, sceneActive]);
+
+  useLayoutEffect(() => {
+    const morphZone = morphZoneRef.current;
+    const startRect = morphStartRectRef.current;
+    morphStartRectRef.current = null;
+
+    if (!sceneActive || !morphZone || !startRect) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    const endRect = morphZone.getBoundingClientRect();
+    const translateX =
+      startRect.left +
+      startRect.width / 2 -
+      (endRect.left + endRect.width / 2);
+    const translateY =
+      startRect.top +
+      startRect.height / 2 -
+      (endRect.top + endRect.height / 2);
+
+    morphZone.getAnimations().forEach((animation) => animation.cancel());
+    morphZone.animate(
+      [
+        { transform: `translate3d(${translateX}px, ${translateY}px, 0)` },
+        { transform: "translate3d(0, 0, 0)" },
+      ],
+      {
+        duration: 240,
+        easing: "cubic-bezier(0.77, 0, 0.175, 1)",
+      },
+    );
+  }, [sceneActive]);
+
+  const activateScene = () => {
+    if (sceneActiveRef.current) return;
+    sceneActiveRef.current = true;
+    morphStartRectRef.current = morphZoneRef.current?.getBoundingClientRect();
+    setSceneActive(true);
+  };
 
   const closeVoice = () => {
     recognitionRef.current?.stop();
@@ -63,6 +126,7 @@ export default function UserPage() {
         .map((result) => result[0].transcript)
         .join(" ");
       setReport(transcript);
+      if (transcript.trim()) activateScene();
     };
     recognition.onerror = () => {
       recognitionRef.current = null;
@@ -83,6 +147,11 @@ export default function UserPage() {
     }
   };
 
+  const nextMessageId = () => {
+    messageIdRef.current += 1;
+    return messageIdRef.current;
+  };
+
   const submitReport = async (event) => {
     event.preventDefault();
     const trimmedReport = report.trim();
@@ -92,24 +161,109 @@ export default function UserPage() {
     recognitionRef.current = null;
     setVoiceOpen(false);
     setLoading(true);
-    setError(null);
-    setSubmittedReport(null);
+    setAgentThinking(true);
+    activateScene();
+    const submissionId = ++submissionRef.current;
+    const history = messages.map(({ role, content }) => ({ role, content }));
+    const userMessage = {
+      id: nextMessageId(),
+      role: "user",
+      content: trimmedReport,
+    };
+
+    setMessages((current) => [...current, userMessage]);
+    setReport("");
+
+    if (!conversationStartedRef.current) {
+      conversationStartedRef.current = true;
+      initialReportRef.current = trimmedReport;
+      setSubmittedReport(null);
+      setHandoffState("sending");
+
+      const [triageResult, supportResult] = await Promise.allSettled([
+        triageReport(trimmedReport),
+        getCrisisSupport(trimmedReport),
+      ]);
+
+      if (submissionRef.current !== submissionId) return;
+
+      if (triageResult.status === "fulfilled") {
+        setSubmittedReport(triageResult.value);
+        setHandoffState("sent");
+      } else {
+        setHandoffState("failed");
+      }
+
+      const support =
+        supportResult.status === "fulfilled"
+          ? supportResult.value
+          : {
+              message:
+                "I’m here with you. Stay somewhere safe and keep your phone nearby.",
+              immediate_actions: [],
+            };
+
+      setMessages((current) => [
+        ...current,
+        {
+          id: nextMessageId(),
+          role: "assistant",
+          content: support.message,
+          actions: support.immediate_actions,
+        },
+      ]);
+      setAgentThinking(false);
+      setLoading(false);
+      return;
+    }
 
     try {
-      const createdReport = await triageReport(trimmedReport);
-      setSubmittedReport(createdReport);
-      setReport("");
-    } catch (submissionError) {
-      setError(
-        submissionError.message || "Failed to reach the crisis service.",
-      );
+      const support = await getCrisisSupport(trimmedReport, history);
+      if (submissionRef.current !== submissionId) return;
+      setMessages((current) => [
+        ...current,
+        {
+          id: nextMessageId(),
+          role: "assistant",
+          content: support.message,
+          actions: support.immediate_actions,
+        },
+      ]);
+    } catch {
+      if (submissionRef.current === submissionId) {
+        setMessages((current) => [
+          ...current,
+          {
+            id: nextMessageId(),
+            role: "assistant",
+            content:
+              "I’m still here. Stay somewhere safe and try your message again.",
+            actions: [],
+          },
+        ]);
+      }
     } finally {
-      setLoading(false);
+      if (submissionRef.current === submissionId) {
+        setAgentThinking(false);
+        setLoading(false);
+      }
+    }
+  };
+
+  const retryHandoff = async () => {
+    if (!initialReportRef.current || handoffState === "sending") return;
+    setHandoffState("sending");
+    try {
+      const createdReport = await triageReport(initialReportRef.current);
+      setSubmittedReport(createdReport);
+      setHandoffState("sent");
+    } catch {
+      setHandoffState("failed");
     }
   };
 
   return (
-    <section className="neural-view">
+    <section className="neural-view" data-engaged={sceneActive}>
       <CrisisRail
         active="incidents"
         disabled={loading}
@@ -129,7 +283,70 @@ export default function UserPage() {
               : "What’s happening, Danyil?"}
         </h1>
 
-        <div className="morph-zone" data-voice={voiceOpen}>
+        {sceneActive && (
+          <section
+            ref={conversationRef}
+            className="conversation-thread"
+            aria-label="Conversation with crisis support"
+            aria-live="polite"
+          >
+            {messages.map((message, index) => (
+              <div className="conversation-turn" key={message.id}>
+                <article className={`chat-bubble is-${message.role}`}>
+                  <p>{message.content}</p>
+                  {message.actions?.length > 0 && (
+                    <ul>
+                      {message.actions.map((action) => (
+                        <li key={action}>{action}</li>
+                      ))}
+                    </ul>
+                  )}
+                </article>
+
+                {index === 0 && handoffState !== "idle" && (
+                  <div className="handoff-event" data-state={handoffState}>
+                    <span className="handoff-mark" aria-hidden="true" />
+                    <div>
+                      <span className="handoff-label">Responder handoff</span>
+                      <p>
+                        {handoffState === "sending"
+                          ? "Sending your information to responders…"
+                          : handoffState === "sent"
+                            ? "Your information has been sent to the responders."
+                            : "Your information could not be sent yet."}
+                      </p>
+                      {handoffState === "sent" && submittedReport && (
+                        <Link to="/responder">View responder map</Link>
+                      )}
+                      {handoffState === "failed" && (
+                        <button type="button" onClick={retryHandoff}>
+                          Try again
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {agentThinking && (
+              <div
+                className="chat-bubble is-assistant is-thinking"
+                aria-label="Support agent is responding"
+              >
+                <span />
+                <span />
+                <span />
+              </div>
+            )}
+          </section>
+        )}
+
+        <div
+          ref={morphZoneRef}
+          className="morph-zone"
+          data-voice={voiceOpen}
+        >
           <div className="input-glow" data-visible={!voiceOpen}>
             <GlowEffect
               colors={["#0894ff", "#c959dd", "#ff2e54", "#ff9004"]}
@@ -150,7 +367,11 @@ export default function UserPage() {
               type="text"
               value={report}
               onChange={(event) => setReport(event.target.value)}
-              placeholder="Describe the crisis…"
+              placeholder={
+                messages.length > 0
+                  ? "Message the support agent…"
+                  : "Describe the crisis…"
+              }
               aria-label="Crisis report"
               disabled={loading || voiceOpen}
               autoComplete="off"
@@ -173,7 +394,11 @@ export default function UserPage() {
                 className="send-button"
                 type="submit"
                 disabled={loading || voiceOpen}
-                aria-label="Send crisis report"
+                aria-label={
+                  messages.length > 0
+                    ? "Send message"
+                    : "Send crisis report"
+                }
                 tabIndex={voiceOpen ? -1 : 0}
               >
                 {loading ? (
@@ -210,20 +435,6 @@ export default function UserPage() {
               </span>
             </span>
           </button>
-        </div>
-
-        <div className="neural-feedback" aria-live="polite">
-          {error && (
-            <div className="feedback-message is-error">
-              I couldn’t send that report. {error}
-            </div>
-          )}
-          {submittedReport && !error && (
-            <div className="feedback-message is-success">
-              <span>{submittedReport.title} is ready for responders.</span>
-              <Link to="/responder">View responder map</Link>
-            </div>
-          )}
         </div>
 
         <section className="news-preview" aria-labelledby="news-preview-title">

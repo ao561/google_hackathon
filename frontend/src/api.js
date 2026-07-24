@@ -22,6 +22,26 @@ export async function triageReport(rawText) {
   return res.json();
 }
 
+/** Ask the independent support agent for an immediate, calming response. */
+export async function getCrisisSupport(rawText, history = []) {
+  const res = await fetch(`${API_BASE}/api/support`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ raw_text: rawText, history }),
+  });
+  if (!res.ok) {
+    let detail = `Server responded ${res.status}`;
+    try {
+      const body = await res.json();
+      if (body.detail) detail = body.detail;
+    } catch {
+      /* ignore non-JSON error bodies */
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
 /** Fetch all stored crisis reports, newest first. */
 export async function getReports() {
   const res = await fetch(`${API_BASE}/api/reports`);
