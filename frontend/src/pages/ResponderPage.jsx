@@ -7,6 +7,8 @@ import ReportOverlay from "../components/ReportOverlay.jsx";
 const colorForUrgency = (u) => (u > 7 ? "#ff0044" : "#ffe600");
 const POLL_MS = 4000;
 const ZOOM_THRESHOLD = 1.6; // camera altitude below which we detect a country
+const DETECT_INTERVAL_MS = 200; // throttle country detection while dragging
+const PIXEL_RATIO_CAP = 1.5; // cap devicePixelRatio (Retina renders 2x = 4x work)
 const esc = (s) => String(s ?? "").replace(/</g, "&lt;");
 
 export default function ResponderPage() {
@@ -20,6 +22,7 @@ export default function ResponderPage() {
   const wrapRef = useRef();
   const [dims, setDims] = useState({ width: 800, height: 600 });
   const activeNameRef = useRef(null);
+  const throttleRef = useRef({ last: 0, timer: null });
 
   // Load country borders once (served locally from /public).
   useEffect(() => {
@@ -56,6 +59,15 @@ export default function ResponderPage() {
     return () => ro.disconnect();
   }, []);
 
+  // Cap the renderer pixel ratio. On Retina displays the globe otherwise
+  // renders at 2x resolution (4x the fragments), which dominates GPU cost.
+  // setPixelRatio re-applies the drawing-buffer size internally.
+  useEffect(() => {
+    const renderer = globeRef.current?.renderer?.();
+    if (!renderer) return;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, PIXEL_RATIO_CAP));
+  }, [dims]);
+
   // Reports that can actually be plotted.
   const mappable = useMemo(
     () => reports.filter((r) => r.lat != null && r.lng != null),
@@ -78,17 +90,9 @@ export default function ResponderPage() {
     return sorted;
   }, [reports, activeCountry, sortBy]);
 
-  // When the camera moves, detect which country it is centered over.
-  const handleZoom = useCallback(
+  // The expensive part: point-in-polygon against every country.
+  const detectCountry = useCallback(
     (pov) => {
-      if (!features.length) return;
-      if (pov.altitude > ZOOM_THRESHOLD) {
-        if (activeNameRef.current !== null) {
-          activeNameRef.current = null;
-          setActiveCountry(null);
-        }
-        return;
-      }
       const found = findCountryAt(pov.lat, pov.lng, features);
       const name = found ? countryName(found) : null;
       if (name !== activeNameRef.current) {
@@ -98,6 +102,48 @@ export default function ResponderPage() {
     },
     [features]
   );
+
+  // onZoom fires on every camera frame while dragging. Do only the cheap
+  // altitude check inline; throttle the polygon detection so a fast drag
+  // doesn't run 177 point-in-polygon tests per frame on the main thread.
+  const handleZoom = useCallback(
+    (pov) => {
+      if (!features.length) return;
+
+      const state = throttleRef.current;
+      if (pov.altitude > ZOOM_THRESHOLD) {
+        // Zoomed out: clear immediately, cancel any pending detection.
+        clearTimeout(state.timer);
+        state.timer = null;
+        if (activeNameRef.current !== null) {
+          activeNameRef.current = null;
+          setActiveCountry(null);
+        }
+        return;
+      }
+
+      const now = Date.now();
+      const wait = DETECT_INTERVAL_MS - (now - state.last);
+      clearTimeout(state.timer);
+      if (wait <= 0) {
+        state.last = now;
+        detectCountry(pov);
+      } else {
+        // Trailing call so the region still resolves once the drag settles.
+        state.timer = setTimeout(() => {
+          state.last = Date.now();
+          detectCountry(pov);
+        }, wait);
+      }
+    },
+    [features, detectCountry]
+  );
+
+  // Clear any pending throttled detection on unmount.
+  useEffect(() => {
+    const state = throttleRef.current;
+    return () => clearTimeout(state.timer);
+  }, []);
 
   const clearRegion = () => {
     activeNameRef.current = null;
@@ -184,7 +230,6 @@ export default function ResponderPage() {
           height={dims.height}
           backgroundColor="#05070d"
           globeImageUrl="//unpkg.com/three-globe/example/img/earth-night.jpg"
-          bumpImageUrl="//unpkg.com/three-globe/example/img/earth-topology.png"
           atmosphereColor="#3a7bd5"
           atmosphereAltitude={0.22}
           onZoom={handleZoom}
@@ -196,7 +241,7 @@ export default function ResponderPage() {
           heatmapBandwidth={0.9}
           heatmapColorSaturation={2.2}
           heatmapTopAltitude={0.28}
-          heatmapsTransitionDuration={600}
+          heatmapsTransitionDuration={0}
           /* Points: hover + click targets */
           pointsData={mappable}
           pointLat="lat"
