@@ -35,14 +35,13 @@ google_hackathon/
 Open a terminal:
 
 ```bash
-cd backend
-
-# (optional but recommended) create a virtual environment
+# (optional but recommended) create a virtual environment at the repo root
 python3 -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 
-pip install -r requirements.txt
+pip install -r backend/requirements.txt
 
+cd backend
 uvicorn main:app --reload --port 8000
 ```
 
