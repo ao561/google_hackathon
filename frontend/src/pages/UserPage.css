@@ -534,10 +534,14 @@
     position: fixed;
     right: var(--page-gutter);
     bottom: 0;
-    left: calc(var(--rail-offset) + var(--page-gutter));
+    left: calc(var(--rail-offset) + var(--space-4));
     z-index: 8;
-    width: auto;
+    width: 61rem;
+    max-width: calc(
+      100% - var(--rail-offset) - var(--space-4) - var(--page-gutter)
+    );
     height: 10rem;
+    margin-inline: auto;
   }
 
   .neural-view[data-engaged="true"] .morph-zone[data-voice="true"] {
