@@ -28,8 +28,14 @@ You provide psychological first aid and practical safety guidance. You are not
 an emergency service, clinician, or substitute for local emergency responders.
 
 How to speak:
-- Sound warm, steady, unhurried, and human. Use short sentences.
-- Listen before advising. Acknowledge distress without dramatizing it.
+- Sound warm, steady, clear, and human. Speak at a slightly brisk pace; do not
+  use a slow or drawn-out calming cadence.
+- Lead with the single most important action the person should take now.
+- Keep a normal reply to no more than three short sentences and roughly 35
+  spoken words. Use "First...", "Then...", and "Next..." when there are
+  multiple actions. Give no more than three actions at once.
+- Use one brief acknowledgement only when it helps. Do not repeat the person's
+  story, add a long preamble, or explain the reasoning unless they ask.
 - Ask only one clear question at a time and allow silence.
 - Do not pressure the person to tell their full story or ask unnecessary
   personal questions.
@@ -46,9 +52,9 @@ Priorities:
    Do not improvise tactical rescue, firefighting, medical, or law-enforcement
    instructions. Encourage following directions from local authorities.
 2. LISTEN AND HELP THEM STEADY. Reflect what you heard. Give one small,
-   situation-appropriate next step. You may offer a slow grounding cue, but do
-   not instruct deep breathing when there may be smoke, toxic exposure, chest
-   pain, or breathing difficulty.
+   situation-appropriate next step. Keep any reflection to a few words. You may
+   offer a brief grounding cue, but do not instruct deep breathing when there
+   may be smoke, toxic exposure, chest pain, or breathing difficulty.
 3. LINK TO HELP. Gently gather only what responders need: exact location,
    what is happening now, current hazards, injuries and medical needs, number
    of people affected, and any useful name, age, contact, accessibility, or
@@ -62,7 +68,8 @@ Priorities:
    was shared with the responder dashboard. Continue helping them stay safe and
    focused until they end the conversation.
 
-Keep every spoken turn concise. Match the user's language when practical.
+Safety-critical instructions may exceed the normal word limit only when
+necessary. Match the user's language when practical.
 """
 
 SUBMIT_REPORT_DECLARATION = types.FunctionDeclaration(
@@ -160,51 +167,61 @@ class LiveSupportBridge:
         self._browser_send_lock = asyncio.Lock()
         self._submitted_report: dict[str, Any] | None = None
         self._cancelled_tool_calls: set[str] = set()
+        self._resume_handle: str | None = None
+        self._resume_requested = False
 
     async def run(self, websocket: WebSocket) -> None:
         await websocket.accept()
-        config = self._live_config()
 
         try:
-            async with self._client.aio.live.connect(
-                model=self._model,
-                config=config,
-            ) as session:
-                await self._send_json(
-                    websocket,
-                    {
-                        "type": "ready",
-                        "model": self._model,
-                        "input_sample_rate": INPUT_SAMPLE_RATE,
-                        "output_sample_rate": OUTPUT_SAMPLE_RATE,
-                    },
-                )
+            resumed = False
+            while True:
+                self._resume_requested = False
+                config = self._live_config(self._resume_handle)
+                async with self._client.aio.live.connect(
+                    model=self._model,
+                    config=config,
+                ) as session:
+                    await self._send_json(
+                        websocket,
+                        {
+                            "type": "ready",
+                            "model": self._model,
+                            "input_sample_rate": INPUT_SAMPLE_RATE,
+                            "output_sample_rate": OUTPUT_SAMPLE_RATE,
+                            "resumed": resumed,
+                        },
+                    )
 
-                tasks = {
-                    asyncio.create_task(
-                        self._receive_from_browser(websocket),
-                        name="live-browser-receive",
-                    ),
-                    asyncio.create_task(
-                        self._send_audio_to_gemini(session),
-                        name="live-gemini-send",
-                    ),
-                    asyncio.create_task(
-                        self._receive_from_gemini(websocket, session),
-                        name="live-gemini-receive",
-                    ),
-                }
-                done, pending = await asyncio.wait(
-                    tasks,
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                for task in pending:
-                    task.cancel()
-                await asyncio.gather(*pending, return_exceptions=True)
-                for task in done:
-                    error = task.exception()
-                    if error:
-                        raise error
+                    tasks = {
+                        asyncio.create_task(
+                            self._receive_from_browser(websocket),
+                            name="live-browser-receive",
+                        ),
+                        asyncio.create_task(
+                            self._send_audio_to_gemini(session),
+                            name="live-gemini-send",
+                        ),
+                        asyncio.create_task(
+                            self._receive_from_gemini(websocket, session),
+                            name="live-gemini-receive",
+                        ),
+                    }
+                    done, pending = await asyncio.wait(
+                        tasks,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in pending:
+                        task.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+                    for task in done:
+                        error = task.exception()
+                        if error:
+                            raise error
+
+                if not self._resume_requested:
+                    return
+                resumed = bool(self._resume_handle)
         except Exception as exc:  # noqa: BLE001 - translate SDK failures for UI
             if not _is_normal_disconnect(exc):
                 logger.exception("Gemini Live voice session failed")
@@ -224,7 +241,10 @@ class LiveSupportBridge:
             except Exception:  # noqa: BLE001 - socket may already be closed
                 pass
 
-    def _live_config(self) -> types.LiveConnectConfig:
+    def _live_config(
+        self,
+        resume_handle: str | None = None,
+    ) -> types.LiveConnectConfig:
         return types.LiveConnectConfig(
             response_modalities=[types.Modality.AUDIO],
             speech_config=types.SpeechConfig(
@@ -258,7 +278,9 @@ class LiveSupportBridge:
             ),
             # Developer API sessions support resume handles, but transparent
             # replay indexing is exclusive to the enterprise Vertex endpoint.
-            session_resumption=types.SessionResumptionConfig(),
+            session_resumption=types.SessionResumptionConfig(
+                handle=resume_handle
+            ),
             tools=[types.Tool(function_declarations=[SUBMIT_REPORT_DECLARATION])],
         )
 
@@ -310,6 +332,8 @@ class LiveSupportBridge:
             async for response in session.receive():
                 received_message = True
                 await self._handle_gemini_message(websocket, session, response)
+                if self._resume_requested:
+                    return
             if not received_message:
                 return
 
@@ -322,6 +346,10 @@ class LiveSupportBridge:
         cancellation = response.tool_call_cancellation
         if cancellation and cancellation.ids:
             self._cancelled_tool_calls.update(cancellation.ids)
+
+        resumption = response.session_resumption_update
+        if resumption and resumption.resumable and resumption.new_handle:
+            self._resume_handle = resumption.new_handle
 
         content = response.server_content
         if content:
@@ -359,6 +387,7 @@ class LiveSupportBridge:
             )
 
         if response.go_away:
+            self._resume_requested = True
             await self._send_json(
                 websocket,
                 {

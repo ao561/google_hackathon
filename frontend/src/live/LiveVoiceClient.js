@@ -1,6 +1,7 @@
 const INPUT_SAMPLE_RATE = 16_000;
 const OUTPUT_SAMPLE_RATE = 24_000;
 const MAX_BUFFERED_AUDIO_BYTES = 1_000_000;
+const VOICE_PLAYBACK_RATE = 1.15;
 
 export class LiveVoiceClient {
   constructor({
@@ -131,6 +132,7 @@ export class LiveVoiceClient {
         if (message.type === "ready") {
           ready = true;
           this.callbacks.onReady?.(message);
+          this.callbacks.onStatus?.("listening");
           resolve();
           return;
         }
@@ -210,11 +212,12 @@ export class LiveVoiceClient {
 
     const source = this.audioContext.createBufferSource();
     source.buffer = buffer;
+    source.playbackRate.value = VOICE_PLAYBACK_RATE;
     source.connect(this.audioContext.destination);
     const now = this.audioContext.currentTime;
     this.nextPlaybackTime = Math.max(now, this.nextPlaybackTime);
     source.start(this.nextPlaybackTime);
-    this.nextPlaybackTime += buffer.duration;
+    this.nextPlaybackTime += buffer.duration / VOICE_PLAYBACK_RATE;
     this.playbackSources.add(source);
     this.callbacks.onStatus?.("speaking");
 

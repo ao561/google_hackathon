@@ -161,7 +161,6 @@ export default function UserPage() {
     setVoiceError("");
     setVoiceStatus("connecting");
     setVoiceOpen(true);
-    activateScene();
     requestAnimationFrame(() => voiceWaveRef.current?.focus());
 
     const client = new LiveVoiceClient({
